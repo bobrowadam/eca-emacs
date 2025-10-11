@@ -551,6 +551,18 @@ with programmatic changes to the chat buffer."
             (propertize (funcall keybinding-for #'eca-chat-tool-call-reject-next)
                         'font-lock-face 'eca-chat-tool-call-keybinding-face))))
 
+(defun eca-chat--make-region-read-only (start end)
+  "Make region from START to END read-only.
+Uses text properties so users cannot edit these areas."
+  (put-text-property start end 'read-only t)
+  (put-text-property start end 'front-sticky '(read-only))
+  (put-text-property start end 'rear-nonsticky '(read-only)))
+
+(defun eca-chat--ensure-prompt-field-editable ()
+  "Ensure the prompt field area is editable by removing read-only properties."
+  (when-let ((prompt-start (eca-chat--prompt-field-start-point)))
+    (remove-text-properties prompt-start (point-max) '(read-only nil))))
+
 (defun eca-chat--insert-prompt-string ()
   "Insert the prompt and context string adding overlay metadatas."
   (let ((prompt-area-ov (make-overlay (line-beginning-position) (1+ (line-beginning-position)) (current-buffer))))
