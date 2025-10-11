@@ -422,15 +422,21 @@ Must be a positive integer."
         empty-chat-buffer)))
 
 (defmacro eca-chat--allow-write (&rest body)
-  "Execute BODY allowing write to buffer."
-  `(let ((inhibit-read-only t))
+  "Execute BODY allowing write to buffer.
+Temporarily disables undo recording to prevent polluting the undo history
+with programmatic changes to the chat buffer."
+  `(let ((inhibit-read-only t)
+         (buffer-undo-list t))  ; Disable undo recording for programmatic changes
      ,@body))
 
 (defmacro eca-chat--with-current-buffer (buffer &rest body)
-  "Eval BODY inside chat BUFFER."
+  "Eval BODY inside chat BUFFER.
+Temporarily disables undo recording to prevent polluting the undo history
+with programmatic changes to the chat buffer."
   (declare (indent 1) (debug t))
   `(with-current-buffer ,buffer
-     (let ((inhibit-read-only t))
+     (let ((inhibit-read-only t)
+           (buffer-undo-list t))  ; Disable undo recording for programmatic changes
        ,@body)))
 
 (defun eca-chat--spinner-start (callback)
@@ -1388,7 +1394,6 @@ restore the chat display after smerge quits."
   (hl-line-mode -1)
   (setq-local eca-chat--history '())
   (setq-local eca-chat--history-index -1)
-  (buffer-disable-undo)
 
   ;; Show diff blocks in markdown-mode with colors.
   (setq-local markdown-fontify-code-blocks-natively t)
