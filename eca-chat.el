@@ -962,7 +962,9 @@ If `eca-chat-focus-on-open' is non-nil, the window is selected."
   (when eca-chat--last-user-message-pos
     (save-excursion
       (goto-char eca-chat--last-user-message-pos)
-      (insert content))))
+      (let ((start (point)))
+        (insert content)
+        (eca-chat--make-region-read-only start (point))))))
 
 (defun eca-chat--add-text-content (text &optional overlay-key overlay-value)
   "Add TEXT to the chat current position.
@@ -974,8 +976,10 @@ Add a overlay before with OVERLAY-KEY = OVERLAY-VALUE if passed."
       (when overlay-key
         (let ((ov (make-overlay (point) (point) (current-buffer))))
           (overlay-put ov overlay-key overlay-value)))
-      (insert text)
-      (point))))
+      (let ((start (point)))
+        (insert text)
+        (eca-chat--make-region-read-only start (point))
+        (point)))))
 
 (defun eca-chat--expandable-content-at-point ()
   "Return expandable content overlay at point, or nil if none."
@@ -1010,9 +1014,11 @@ When expanded, shows CONTENT.
 Applies LABEL-FACE to label and CONTENT-FACE to content."
   (save-excursion
     (let* ((context-start (eca-chat--prompt-area-start-point))
-           (start-point (1- context-start)))
+           (start-point (1- context-start))
+           (block-start nil))
       (goto-char start-point)
       (unless (bolp) (insert "\n"))
+      (setq block-start (point))
       (let ((ov-label (make-overlay (point) (point) (current-buffer))))
         (overlay-put ov-label 'eca-chat--expandable-content-id id)
         (overlay-put ov-label 'eca-chat--expandable-content-toggle nil)
@@ -1029,7 +1035,9 @@ Applies LABEL-FACE to label and CONTENT-FACE to content."
                (_ (insert "\n"))
                (ov-content (make-overlay start-point start-point (current-buffer) nil t)))
           (overlay-put ov-content 'eca-chat--expandable-content-content (propertize content 'line-prefix "   "))
-          (overlay-put ov-label 'eca-chat--expandable-content-ov-content ov-content))))))
+          (overlay-put ov-label 'eca-chat--expandable-content-ov-content ov-content)
+          ;; Make the entire expandable block read-only
+          (eca-chat--make-region-read-only block-start (point)))))))
 
 (defun eca-chat--update-expandable-content (id label content &optional append-content?)
   "Update to LABEL and CONTENT the expandable content of id ID."
@@ -1046,19 +1054,24 @@ Applies LABEL-FACE to label and CONTENT-FACE to content."
       (save-excursion
         ;; Refresh the label line (cheap even when appending)
         (goto-char (overlay-start ov-label))
-        (delete-region (point) (1- (overlay-start ov-content)))
-        (insert (propertize (eca-chat--propertize-only-first-word label
-                                                                  'line-prefix (unless (string-empty-p new-content)
-                                                                                 (if open?
-                                                                                     eca-chat-expandable-block-close-symbol
-                                                                                   eca-chat-expandable-block-open-symbol)))
-                            'help-echo "mouse-1 / RET / tab: expand/collapse"))
+        (let ((label-start (point)))
+          (delete-region (point) (1- (overlay-start ov-content)))
+          (insert (propertize (eca-chat--propertize-only-first-word label
+                                                                    'line-prefix (unless (string-empty-p new-content)
+                                                                                   (if open?
+                                                                                       eca-chat-expandable-block-close-symbol
+                                                                                     eca-chat-expandable-block-open-symbol)))
+                              'help-echo "mouse-1 / RET / tab: expand/collapse"))
+          ;; Make the updated label read-only
+          (eca-chat--make-region-read-only label-start (point)))
         (when open?
           (if append-content?
               ;; Fast path: just append the delta to the visible content
-              (progn
-                (goto-char (overlay-end ov-content))
-                (insert delta))
+              (let ((append-start (overlay-end ov-content)))
+                (goto-char append-start)
+                (insert delta)
+                ;; Make the appended content read-only
+                (eca-chat--make-region-read-only append-start (point)))
             ;; Replace the whole visible content
             (let ((content-start (overlay-start ov-content)))
               (delete-region content-start (overlay-end ov-content))
@@ -1088,11 +1101,13 @@ If FORCE? decide to CLOSE? or not."
               (goto-char (1+ (line-end-position)))
               (delete-region (overlay-start ov-content) (overlay-end ov-content))
               (overlay-put ov-label 'eca-chat--expandable-content-toggle nil))
-          (progn
-            (put-text-property (point) (line-end-position)
+          (let ((content-start (overlay-start ov-content)))
+            (put-text-property (overlay-start ov-label) (line-end-position)
                                'line-prefix eca-chat-expandable-block-close-symbol)
-            (goto-char (overlay-start ov-content))
+            (goto-char content-start)
             (insert content "\n")
+            ;; Make the inserted content read-only
+            (eca-chat--make-region-read-only content-start (point))
             (overlay-put ov-label 'eca-chat--expandable-content-toggle t))))
       close?)))
 
