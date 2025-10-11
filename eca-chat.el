@@ -567,10 +567,13 @@ Uses text properties so users cannot edit these areas."
   "Insert the prompt and context string adding overlay metadatas."
   (let ((prompt-area-ov (make-overlay (line-beginning-position) (1+ (line-beginning-position)) (current-buffer))))
     (overlay-put prompt-area-ov 'eca-chat-prompt-area t))
-  (let ((progress-area-ov (make-overlay (line-beginning-position) (line-end-position) (current-buffer) nil t)))
+  (let* ((progress-start (point))
+         (progress-area-ov (make-overlay (line-beginning-position) (line-end-position) (current-buffer) nil t)))
     (overlay-put progress-area-ov 'eca-chat-progress-area t)
     (insert "\n")
-    (move-overlay progress-area-ov (overlay-start progress-area-ov) (1- (overlay-end progress-area-ov))))
+    (move-overlay progress-area-ov (overlay-start progress-area-ov) (1- (overlay-end progress-area-ov)))
+    ;; Make the progress line read-only
+    (eca-chat--make-region-read-only progress-start (point)))
   (let ((context-area-ov (make-overlay (line-beginning-position) (line-end-position) (current-buffer) nil t)))
     (overlay-put context-area-ov 'eca-chat-context-area t)
     (insert (propertize eca-chat-context-prefix 'font-lock-face 'eca-chat-context-unlinked-face))
@@ -578,15 +581,20 @@ Uses text properties so users cannot edit these areas."
     (move-overlay context-area-ov (overlay-start context-area-ov) (1- (overlay-end context-area-ov))))
   (let ((prompt-field-ov (make-overlay (line-beginning-position) (1+ (line-beginning-position)) (current-buffer))))
     (overlay-put prompt-field-ov 'eca-chat-prompt-field t)
-    (overlay-put prompt-field-ov 'before-string (propertize eca-chat-prompt-prefix 'font-lock-face 'eca-chat-prompt-prefix-face))))
+    (overlay-put prompt-field-ov 'before-string (propertize eca-chat-prompt-prefix 'font-lock-face 'eca-chat-prompt-prefix-face)))
+  ;; Ensure the prompt field is editable after setup
+  (eca-chat--ensure-prompt-field-editable))
 
 (defun eca-chat--clear ()
   "Clear the chat for SESSION."
    (erase-buffer)
    (remove-overlays (point-min) (point-max))
+   (remove-text-properties (point-min) (point-max) '(read-only nil))
    (insert "\n")
+   (eca-chat--make-region-read-only (point-min) (point))
    (eca-chat--insert-prompt-string)
-   (eca-chat--refresh-context))
+   (eca-chat--refresh-context)
+   (eca-chat--ensure-prompt-field-editable))
 
 (defun eca-chat--stop-prompt (session)
   "Stop the running chat prompt for SESSION."
@@ -601,7 +609,7 @@ Uses text properties so users cannot edit these areas."
 Otherwise to a not loading state."
   (unless (eq eca-chat--chat-loading loading)
     (setq-local eca-chat--chat-loading loading)
-    (setq-local buffer-read-only loading)
+    ;; Don't use buffer-read-only; we use text properties for read-only regions
     (let ((prompt-field-ov (eca-chat--prompt-field-ov))
           (stop-text (eca-buttonize
                       eca-chat-mode-map
@@ -612,18 +620,28 @@ Otherwise to a not loading state."
             (overlay-put prompt-field-ov 'before-string (propertize eca-chat-prompt-prefix-loading 'font-lock-face 'default))
             (save-excursion
               (goto-char (overlay-start prompt-field-ov))
-              (insert stop-text)))
+              (let ((start (point))
+                    (inhibit-read-only t))
+                (insert stop-text)
+                ;; Make the stop button read-only
+                (eca-chat--make-region-read-only start (point)))))
         (progn
           (overlay-put prompt-field-ov 'before-string (propertize eca-chat-prompt-prefix 'font-lock-face 'eca-chat-prompt-prefix-face))
           (save-excursion
             (goto-char (overlay-start prompt-field-ov))
-            (delete-region (point) (+ (point) (length stop-text)))))))))
+            (let ((inhibit-read-only t))
+              (delete-region (point) (+ (point) (length stop-text))))))))
+    ;; Make the prompt field editable when not loading
+    (when (not loading)
+      (eca-chat--ensure-prompt-field-editable))))
 
 (defun eca-chat--set-prompt (text)
   "Set the chat prompt to be TEXT."
   (-some-> (eca-chat--prompt-field-start-point) (goto-char))
   (delete-region (point) (line-end-position))
-  (insert text))
+  (insert text)
+  ;; Ensure the prompt remains editable after setting text
+  (eca-chat--ensure-prompt-field-editable))
 
 (defun eca-chat--cycle-history (n)
   "Cycle history by N."
@@ -1042,10 +1060,12 @@ Applies LABEL-FACE to label and CONTENT-FACE to content."
                 (goto-char (overlay-end ov-content))
                 (insert delta))
             ;; Replace the whole visible content
-            (progn
-              (delete-region (overlay-start ov-content) (overlay-end ov-content))
-              (goto-char (overlay-start ov-content))
-              (insert new-content))))))))
+            (let ((content-start (overlay-start ov-content)))
+              (delete-region content-start (overlay-end ov-content))
+              (goto-char content-start)
+              (insert new-content)
+              ;; Make the new content read-only
+              (eca-chat--make-region-read-only content-start (point)))))))))
 
 (defun eca-chat--expandable-content-toggle (id &optional force? close?)
   "Toggle the expandable-content of ID.
@@ -1134,13 +1154,17 @@ If FORCE? decide to CLOSE? or not."
   (when (buffer-live-p chat-buffer)
     (eca-chat--with-current-buffer chat-buffer
       (save-excursion
-        (-some-> (eca-chat--prompt-progress-field-ov)
-          (overlay-start)
-          (goto-char))
-        (delete-region (point) (line-end-position))
-        (insert (propertize eca-chat--progress-text
-                            'font-lock-face 'eca-chat-system-messages-face)
-                eca-chat--spinner-string)))))
+        (let ((progress-start (-some-> (eca-chat--prompt-progress-field-ov)
+                                (overlay-start))))
+          (goto-char progress-start)
+          (delete-region (point) (line-end-position))
+          (insert (propertize eca-chat--progress-text
+                              'font-lock-face 'eca-chat-system-messages-face)
+                  eca-chat--spinner-string)
+          ;; Make the progress line read-only
+          (eca-chat--make-region-read-only progress-start (point))))
+      ;; Ensure prompt field remains editable after progress update
+      (eca-chat--ensure-prompt-field-editable))))
 
 (defun eca-chat--refresh-context ()
   "Refresh chat context."
@@ -1425,9 +1449,12 @@ restore the chat display after smerge quits."
     (when (eq 0 (length (string-trim (buffer-string))))
       (save-excursion
         (goto-char (point-min))
-        (insert "\n")
-        (insert (propertize (eca--session-chat-welcome-message session)
-                            'font-lock-face 'eca-chat-welcome-face))
+        (let ((start (point)))
+          (insert "\n")
+          (insert (propertize (eca--session-chat-welcome-message session)
+                              'font-lock-face 'eca-chat-welcome-face))
+          ;; Make the welcome message read-only
+          (eca-chat--make-region-read-only start (point)))
         (eca-chat--insert-prompt-string)))
 
     ;; TODO is there a better way to do that?
